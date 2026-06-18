@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Meeting Notes — offscreen audio</title>
+  </head>
+  <body>
+    <!--
+      Invisible offscreen document. It exists only to run Web Audio / MediaStream
+      code that the MV3 service worker cannot. All capture, mixing, PCM encoding,
+      and uploads happen in offscreen.js.
+    -->
+    <script src="offscreen.js"></script>
+  </body>
+</html>
