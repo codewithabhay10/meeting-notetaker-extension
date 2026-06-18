@@ -60,11 +60,15 @@ copy .env.example .env
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `ANTHROPIC_API_KEY` | — | Required for `/summarize`. Stays on the backend; never shipped in the extension. |
+| `SUMMARY_PROVIDER` | `anthropic` | `ollama` (free/offline) or `gemini` (free cloud) need no Claude key. |
+| `ANTHROPIC_API_KEY` | — | Only for `SUMMARY_PROVIDER=anthropic`. Stays on the backend. |
+| `SUMMARY_MODEL` | `claude-sonnet-4-6` | Claude model. Swap to `claude-haiku-4-5-20251001` for lower cost. |
+| `GEMINI_API_KEY` | — | Free key from <https://aistudio.google.com/app/apikey> (for `gemini`). |
+| `GEMINI_MODEL` | `gemini-2.0-flash` | Any free Gemini model, e.g. `gemini-2.5-flash`. |
+| `OLLAMA_MODEL` | `llama3.1:8b` | Any pulled Ollama model (for `ollama`). |
 | `WHISPER_MODEL` | `small.en` | `base.en` (faster), `medium.en`/`medium` (more accurate). |
 | `WHISPER_DEVICE` | `auto` | `auto` safely probes CUDA and falls back to CPU. Force with `cuda` or `cpu`. |
 | `WHISPER_COMPUTE_TYPE` | — | Override compute type (e.g. `int8`, `float16`). |
-| `SUMMARY_MODEL` | `claude-sonnet-4-6` | Swap to `claude-haiku-4-5-20251001` for lower cost. |
 
 ### Run the server
 
@@ -148,6 +152,41 @@ First call downloads the model (~240 MB) and, in `auto` mode, runs a one-time CU
 
 ---
 
-## Optional: local LLM instead of Claude
+## Notes without a Claude key
 
-`/summarize` isolates the model call in `call_llm()`. To use a local Ollama server later, swap that one function to POST to `http://localhost:11434/api/chat` (model `llama3.1:8b`) returning the same JSON schema — no other changes needed.
+`/summarize` supports two free alternatives to Claude, same JSON schema, selected by `SUMMARY_PROVIDER`.
+
+### Option A — Google Gemini (free cloud API)
+
+1. Get a free key at <https://aistudio.google.com/app/apikey>.
+2. In `backend/.env`:
+   ```ini
+   SUMMARY_PROVIDER=gemini
+   GEMINI_API_KEY=AIza...your-key...
+   GEMINI_MODEL=gemini-2.0-flash
+   ```
+3. Restart the backend and click **Generate Notes**. Uses Gemini's `responseMimeType=application/json` so output stays valid JSON.
+
+### Option B — local Ollama (free, offline, no key)
+
+`/summarize` can use a local [Ollama](https://ollama.com) model instead of Claude — zero cost, no API key, same JSON schema. Selected by env flag:
+
+```ini
+# backend/.env
+SUMMARY_PROVIDER=ollama
+OLLAMA_MODEL=llama3.1:8b            # or any pulled model, e.g. llama3.1:latest, qwen2.5:3b
+OLLAMA_URL=http://127.0.0.1:11434/api/chat
+```
+
+Setup:
+
+```powershell
+ollama serve                # if not already running as the background app
+ollama pull llama3.1:8b     # one-time model download (~4.9 GB)
+```
+
+Then restart the backend (`uvicorn main:app --reload`) and click **Generate Notes** as usual. It calls Ollama's `/api/chat` with `format=json` so output stays valid JSON.
+
+> Tip: use `127.0.0.1`, not `localhost`, on Windows — `localhost` can resolve to IPv6 `::1` while Ollama listens on IPv4, causing timeouts. The default already uses `127.0.0.1`.
+
+Switch back to Claude any time with `SUMMARY_PROVIDER=anthropic`. The provider logic lives entirely in `call_llm()` / `_call_ollama()` / `_call_anthropic()` in `main.py`.

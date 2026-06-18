@@ -196,16 +196,14 @@ Rules:
 - Output must be valid JSON parseable by a strict JSON parser."""
 
 
-def call_llm(transcript: str) -> str:
-    """
-    Isolated LLM call so the provider is easy to swap later (e.g. Ollama).
-    Returns the model's raw text response.
-    """
+def _call_anthropic(transcript: str) -> str:
+    """Claude API call. Returns the model's raw text."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise HTTPException(
             status_code=400,
-            detail="ANTHROPIC_API_KEY is not set. Add it to backend/.env and restart the server.",
+            detail="ANTHROPIC_API_KEY is not set. Add it to backend/.env and restart, "
+            "or set SUMMARY_PROVIDER=ollama to use a local model instead.",
         )
 
     from anthropic import Anthropic
@@ -219,6 +217,108 @@ def call_llm(transcript: str) -> str:
         messages=[{"role": "user", "content": transcript}],
     )
     return "".join(block.text for block in resp.content if block.type == "text")
+
+
+def _call_ollama(transcript: str) -> str:
+    """
+    Local Ollama call (zero-cost alternative to Claude). Returns raw text.
+
+    Uses Ollama's /api/chat with format=json so the model is constrained to emit
+    a JSON object matching our notes schema.
+    """
+    import httpx
+
+    # Default to 127.0.0.1 (not "localhost"): on Windows "localhost" can resolve
+    # to IPv6 ::1 first, but Ollama binds IPv4 127.0.0.1 by default -> timeouts.
+    url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/api/chat")
+    model = os.environ.get("OLLAMA_MODEL", "llama3.1:8b")
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": transcript},
+        ],
+        "stream": False,
+        "format": "json",
+        "options": {"temperature": 0.2},
+    }
+    try:
+        # Generous timeout: first call may load the model into memory.
+        r = httpx.post(url, json=payload, timeout=300.0)
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not reach Ollama at {url} ({e}). "
+            "Is `ollama serve` running and the model pulled (`ollama pull llama3.1:8b`)?",
+        )
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Ollama error {r.status_code}: {r.text[:300]}")
+    data = r.json()
+    return (data.get("message") or {}).get("content", "")
+
+
+def _call_gemini(transcript: str) -> str:
+    """
+    Google Gemini (AI Studio) call — has a generous FREE tier. Returns raw text.
+
+    Get a free key at https://aistudio.google.com/app/apikey and set
+    GEMINI_API_KEY. Uses responseMimeType=application/json so output is valid JSON.
+    """
+    import httpx
+
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="GEMINI_API_KEY is not set. Get a free key at "
+            "https://aistudio.google.com/app/apikey and add it to backend/.env.",
+        )
+
+    base = os.environ.get("GEMINI_URL", "https://generativelanguage.googleapis.com/v1beta")
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+    url = f"{base}/models/{model}:generateContent"
+    payload = {
+        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "contents": [{"role": "user", "parts": [{"text": transcript}]}],
+        "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
+    }
+    try:
+        r = httpx.post(
+            url,
+            headers={"x-goog-api-key": api_key},
+            json=payload,
+            timeout=120.0,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach Gemini API ({e}).")
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Gemini error {r.status_code}: {r.text[:400]}")
+
+    data = r.json()
+    candidates = data.get("candidates") or []
+    if not candidates:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Gemini returned no candidates (possibly safety-blocked): {str(data)[:400]}",
+        )
+    parts = (candidates[0].get("content") or {}).get("parts") or []
+    return "".join(p.get("text", "") for p in parts)
+
+
+def call_llm(transcript: str) -> str:
+    """
+    Isolated LLM call. Provider chosen by env SUMMARY_PROVIDER:
+      * anthropic (default) -> Claude API
+      * ollama              -> local Ollama server (free, offline)
+      * gemini              -> Google AI Studio (free tier)
+    Returns the model's raw text response.
+    """
+    provider = os.environ.get("SUMMARY_PROVIDER", "anthropic").lower()
+    if provider == "ollama":
+        return _call_ollama(transcript)
+    if provider == "gemini":
+        return _call_gemini(transcript)
+    return _call_anthropic(transcript)
 
 
 def parse_notes(raw: str):
