@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Meeting Notes</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>Meeting Notes</h1>
+      <span id="backendDot" class="dot dot-unknown" title="Backend status"></span>
+    </header>
+
+    <!-- Error / warning banner -->
+    <div id="banner" class="banner hidden"></div>
+
+    <!-- Controls -->
+    <section class="controls">
+      <button id="startBtn" class="btn btn-primary">● Start recording</button>
+
+      <div id="recordingRow" class="recording-row hidden">
+        <span class="rec-dot"></span>
+        <span id="timer" class="timer">00:00</span>
+        <button id="stopBtn" class="btn btn-stop">■ Stop</button>
+      </div>
+
+      <div id="meters" class="meters hidden">
+        <div class="meter">
+          <span class="meter-label">Tab</span>
+          <div class="meter-track"><div id="tabLevel" class="meter-fill"></div></div>
+        </div>
+        <div class="meter">
+          <span class="meter-label">Mic</span>
+          <div class="meter-track"><div id="micLevel" class="meter-fill"></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Live transcript -->
+    <section class="block">
+      <div class="block-head">
+        <h2>Transcript</h2>
+        <button id="clearBtn" class="btn btn-ghost" title="Clear transcript & notes">Clear</button>
+      </div>
+      <div id="transcript" class="transcript" aria-live="polite">
+        <p class="placeholder">Press <strong>Start recording</strong> while your meeting tab is focused. The live transcript appears here.</p>
+      </div>
+    </section>
+
+    <!-- Notes -->
+    <section class="block">
+      <div class="block-head">
+        <h2>Notes</h2>
+        <button id="generateBtn" class="btn btn-primary" disabled>Generate Notes</button>
+      </div>
+      <div id="notes" class="notes">
+        <p class="placeholder">Notes generated from the transcript will appear here.</p>
+      </div>
+      <div id="notesActions" class="notes-actions hidden">
+        <button id="copyBtn" class="btn btn-ghost">Copy as Markdown</button>
+        <button id="downloadBtn" class="btn btn-ghost">Download .md</button>
+      </div>
+    </section>
+
+    <script src="sidepanel.js"></script>
+  </body>
+</html>
