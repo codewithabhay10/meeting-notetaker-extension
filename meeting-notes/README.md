@@ -4,7 +4,7 @@ A Chrome/Brave (Manifest V3) extension + local Python backend that:
 
 1. Captures a meeting tab's audio **and** your microphone, mixed into one stream.
 2. Transcribes locally with [`faster-whisper`](https://github.com/SYSTRAN/faster-whisper) (a FastAPI server), showing a near-live transcript in the side panel.
-3. On demand, sends the transcript to the **Claude API** and renders structured notes — summary, key points, decisions, and action items.
+3. On demand, sends the transcript to an LLM (**Gemini** free tier, **Ollama** offline, or **Claude**) and renders structured notes — summary, key points, decisions, and action items.
 4. Lets you copy the notes as Markdown or download them as a `.md` file.
 
 Works with Google Meet / Zoom web / Teams web — `tabCapture` taps whatever audio the tab plays, so the platform doesn't matter.
@@ -49,18 +49,26 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Create your env file and add your Claude key (needed only for **Generate Notes**):
+Create your env file and configure your notes provider (needed only for **Generate Notes**):
 
 ```powershell
 copy .env.example .env
-# edit .env -> ANTHROPIC_API_KEY=sk-ant-...
+# edit .env -> pick a SUMMARY_PROVIDER (gemini recommended — free, no install)
+```
+
+The easiest setup uses **Gemini** (free cloud API, no local install):
+
+```ini
+# backend/.env
+SUMMARY_PROVIDER=gemini
+GEMINI_API_KEY=AIza...your-key...   # free from https://aistudio.google.com/app/apikey
 ```
 
 `.env` options:
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `SUMMARY_PROVIDER` | `anthropic` | `ollama` (free/offline) or `gemini` (free cloud) need no Claude key. |
+| `SUMMARY_PROVIDER` | `gemini` | `gemini` (free cloud, recommended), `ollama` (free/offline), or `anthropic` (paid). |
 | `ANTHROPIC_API_KEY` | — | Only for `SUMMARY_PROVIDER=anthropic`. Stays on the backend. |
 | `SUMMARY_MODEL` | `claude-sonnet-4-6` | Claude model. Swap to `claude-haiku-4-5-20251001` for lower cost. |
 | `GEMINI_API_KEY` | — | Free key from <https://aistudio.google.com/app/apikey> (for `gemini`). |
@@ -98,7 +106,8 @@ Leave this running while you use the extension.
 3. **Click the extension's toolbar icon while that tab is focused.** This both opens the side panel **and** authorizes capture of the tab.
    > Why this matters: in MV3, capture needs the `activeTab` grant, which comes from *clicking the action icon* — not from merely opening the side panel. Clicking the icon on your meeting tab is the required gesture.
 4. In the side panel click **● Start recording**.
-   - Allow the **microphone** prompt the first time (so your voice is captured).
+   - Allow the **microphone** prompt the first time (so your voice is captured too).
+   - If the mic prompt doesn't appear or was previously blocked, see [Troubleshooting](#troubleshooting) — tab audio still records without it.
    - You should **still hear the meeting** — if it goes silent, see Troubleshooting.
 5. Watch the **Tab** and **Mic** level meters move and the transcript fill in (~every 10 s).
 6. Click **■ Stop** when done. (To record again, click the toolbar icon on the meeting tab first, then Start.)
@@ -128,7 +137,7 @@ First call downloads the model (~240 MB) and, in `auto` mode, runs a one-time CU
 
 **Phase 3 — live transcript:** Speak / let the meeting play; transcript text appears in the panel roughly every 10 seconds.
 
-**Phase 4 — notes:** With `ANTHROPIC_API_KEY` set, click Generate Notes → four populated sections; Copy and Download work.
+**Phase 4 — notes:** With your chosen `SUMMARY_PROVIDER` configured (e.g. `gemini` + `GEMINI_API_KEY`), click Generate Notes → four populated sections; Copy and Download work.
 
 **Phase 5 — persistence:** Close and reopen the side panel → your transcript and notes are still there. The timer counts up while recording.
 
@@ -148,18 +157,19 @@ First call downloads the model (~240 MB) and, in `auto` mode, runs a one-time CU
 - **"Extension has not been invoked for the current page (activeTab)":** you opened the side panel without authorizing capture. Click the extension's **toolbar icon while your meeting tab is focused** (that grants `activeTab`), then press Start.
 - **Backend dot is red / "not reachable":** the server isn't running. Start `uvicorn main:app --reload`.
 - **Meeting goes silent when recording:** that's the classic tab-capture bug; this build re-routes tab audio to your speakers, so report it if it happens (check the offscreen console via `chrome://extensions` → the extension's "Inspect views: offscreen.html").
-- **Mic meter stays flat:** mic permission was denied. Click the extension, re-trigger the prompt, allow it. Capture still works tab-only without it.
-- **`Generate Notes` says key missing:** set `ANTHROPIC_API_KEY` in `backend/.env` and restart the server.
+- **Mic meter stays flat / "Microphone unavailable (NotAllowedError)":** the mic permission was denied or previously blocked. Go to `chrome://settings/content/microphone`, remove the extension from the **Block** list, reload the extension from `chrome://extensions`, then try again. Tab audio still records without it.
+- **`Generate Notes` returns 400 / "Transcript is empty":** usually means the LLM provider isn't reachable. If using `ollama`, ensure `ollama serve` is running. If using `gemini`, check your `GEMINI_API_KEY`.
+- **`Generate Notes` says key missing:** set the appropriate key in `backend/.env` for your provider (`GEMINI_API_KEY` for gemini, `ANTHROPIC_API_KEY` for anthropic) and restart the server.
 - **First transcription is slow / connection resets:** the first call downloads the model and probes CUDA. Give it a minute; subsequent calls are fast.
 - **Want guaranteed CPU:** set `WHISPER_DEVICE=cpu` in `.env`.
 
 ---
 
-## Notes without a Claude key
+## Notes providers
 
-`/summarize` supports two free alternatives to Claude, same JSON schema, selected by `SUMMARY_PROVIDER`.
+`/summarize` supports three LLM backends, same JSON schema, selected by `SUMMARY_PROVIDER`.
 
-### Option A — Google Gemini (free cloud API)
+### Option A — Google Gemini (free cloud API, recommended)
 
 1. Get a free key at <https://aistudio.google.com/app/apikey>.
 2. In `backend/.env`:
@@ -192,4 +202,13 @@ Then restart the backend (`uvicorn main:app --reload`) and click **Generate Note
 
 > Tip: use `127.0.0.1`, not `localhost`, on Windows — `localhost` can resolve to IPv6 `::1` while Ollama listens on IPv4, causing timeouts. The default already uses `127.0.0.1`.
 
-Switch back to Claude any time with `SUMMARY_PROVIDER=anthropic`. The provider logic lives entirely in `call_llm()` / `_call_ollama()` / `_call_anthropic()` in `main.py`.
+### Option C — Claude (paid API)
+
+```ini
+# backend/.env
+SUMMARY_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+SUMMARY_MODEL=claude-sonnet-4-6      # or claude-haiku-4-5-20251001 for lower cost
+```
+
+Switch providers any time by changing `SUMMARY_PROVIDER` and restarting the backend. The provider logic lives entirely in `call_llm()` / `_call_ollama()` / `_call_gemini()` / `_call_anthropic()` in `main.py`.
