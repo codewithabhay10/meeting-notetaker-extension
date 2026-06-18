@@ -15,10 +15,13 @@ server boot stay fast and don't require the model to be downloaded yet.
 
 import os
 import re
+import sys
 import json
 import tempfile
+import subprocess
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -60,12 +63,44 @@ def health():
 _model = None  # cached WhisperModel singleton
 
 
+def _cuda_probe_ok(model_size: str) -> bool:
+    """
+    Decide whether CUDA inference actually WORKS — in a child process.
+
+    We can't just try/except in-process: a missing cuDNN/driver makes
+    CTranslate2 abort with a NATIVE crash (e.g. "Could not locate
+    cudnn_ops64_9.dll"), which kills the whole server instead of raising a
+    catchable Python exception. So we run a tiny CUDA transcription in a
+    subprocess and only trust CUDA if that subprocess exits cleanly.
+    """
+    code = (
+        "import sys, numpy as np;"
+        "from faster_whisper import WhisperModel;"
+        "m = WhisperModel(sys.argv[1], device='cuda', compute_type='float16');"
+        "list(m.transcribe(np.zeros(16000, dtype=np.float32), language='en')[0]);"
+        "sys.exit(0)"
+    )
+    try:
+        r = subprocess.run(
+            [sys.executable, "-c", code, model_size],
+            capture_output=True,
+            timeout=180,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def get_model():
     """
     Lazily load the Whisper model once and cache it.
 
-    Tries CUDA/float16 first (good for an RTX 3050 with small.en/base.en),
-    then falls back to CPU/int8 so the server still works without a GPU.
+    Device selection (env WHISPER_DEVICE = auto | cuda | cpu, default auto):
+      * auto -> probe CUDA safely (see _cuda_probe_ok); use it if it works,
+        otherwise CPU. Good for an RTX 3050 with small.en/base.en when cuDNN
+        is installed; safely falls back to CPU when it isn't.
+      * cuda/cpu -> force that device.
+    Compute type can be overridden with WHISPER_COMPUTE_TYPE.
     """
     global _model
     if _model is not None:
@@ -74,14 +109,32 @@ def get_model():
     from faster_whisper import WhisperModel
 
     size = os.environ.get("WHISPER_MODEL", "small.en")
-    try:
-        _model = WhisperModel(size, device="cuda", compute_type="float16")
-        print(f"[whisper] loaded '{size}' on cuda/float16")
-    except Exception as e:
-        print(f"[whisper] CUDA unavailable ({e!r}); falling back to cpu/int8")
-        _model = WhisperModel(size, device="cpu", compute_type="int8")
-        print(f"[whisper] loaded '{size}' on cpu/int8")
+    device = os.environ.get("WHISPER_DEVICE", "auto").lower()
+    compute = os.environ.get("WHISPER_COMPUTE_TYPE", "").strip()
+
+    if device == "auto":
+        if _cuda_probe_ok(size):
+            device = "cuda"
+        else:
+            print("[whisper] CUDA not usable (cuDNN/driver missing or probe failed); using CPU.")
+            device = "cpu"
+
+    if device == "cuda":
+        ct = compute or "float16"
+        _model = WhisperModel(size, device="cuda", compute_type=ct)
+        print(f"[whisper] loaded '{size}' on cuda/{ct}")
+    else:
+        ct = compute or "int8"
+        _model = WhisperModel(size, device="cpu", compute_type=ct)
+        print(f"[whisper] loaded '{size}' on cpu/{ct}")
     return _model
+
+
+def _run_transcription(path: str) -> str:
+    """Blocking transcription helper (runs in a threadpool)."""
+    model = get_model()
+    segments, _info = model.transcribe(path, language="en")
+    return " ".join(seg.text.strip() for seg in segments).strip()
 
 
 @app.post("/transcribe")
@@ -101,9 +154,9 @@ async def transcribe(file: UploadFile = File(...)):
         tmp.flush()
         tmp.close()
 
-        model = get_model()
-        segments, _info = model.transcribe(tmp_path, language="en")
-        text = " ".join(seg.text.strip() for seg in segments).strip()
+        # The model call (and first-time model download) is blocking, so run it
+        # in a worker thread to keep the event loop responsive.
+        text = await run_in_threadpool(_run_transcription, tmp_path)
         return {"text": text}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Transcription failed: {e}")
