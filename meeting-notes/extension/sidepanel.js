@@ -107,11 +107,11 @@ async function onStart() {
 
   // Trigger the mic-permission prompt here in the (visible) side panel so the
   // offscreen document can use the mic without a prompt it can't display.
-  await ensureMicPermission();
+  const micAllowed = await ensureMicPermission();
 
   startBtn.disabled = true;
   const res = await chrome.runtime
-    .sendMessage({ type: "START_CAPTURE" })
+    .sendMessage({ type: "START_CAPTURE", micAllowed })
     .catch((e) => ({ ok: false, error: String(e) }));
 
   if (!res || !res.ok) {
@@ -131,9 +131,21 @@ async function onStart() {
 }
 
 async function ensureMicPermission() {
+  // First check if permission is already persistently granted.
+  try {
+    const status = await navigator.permissions.query({ name: "microphone" });
+    if (status.state === "granted") return true;
+  } catch (_) {
+    // permissions.query may not support 'microphone' in all browsers; continue.
+  }
+
+  // Prompt the user for microphone access from this visible panel.
+  // The grant persists at the extension origin level, so the offscreen
+  // document inherits it.
   try {
     const s = await navigator.mediaDevices.getUserMedia({ audio: true });
     s.getTracks().forEach((t) => t.stop()); // we only wanted the permission grant
+    return true;
   } catch (e) {
     showBanner(
       "Microphone access was not granted (" +
@@ -141,6 +153,7 @@ async function ensureMicPermission() {
         "). The meeting/tab audio will still be recorded, but your voice won't be.",
       "warn"
     );
+    return false;
   }
 }
 

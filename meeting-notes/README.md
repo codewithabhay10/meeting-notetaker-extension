@@ -94,14 +94,16 @@ Leave this running while you use the extension.
 ## 3. Use it
 
 1. Start the backend (step 1) — the dot next to "Meeting Notes" in the panel turns **green** when it's reachable.
-2. Open your meeting in a normal tab and **focus that tab**.
-3. Open the side panel and click **● Start recording**.
+2. Open your meeting in a normal tab and **focus that tab** (for a quick test, use `http://localhost:8000/test`).
+3. **Click the extension's toolbar icon while that tab is focused.** This both opens the side panel **and** authorizes capture of the tab.
+   > Why this matters: in MV3, capture needs the `activeTab` grant, which comes from *clicking the action icon* — not from merely opening the side panel. Clicking the icon on your meeting tab is the required gesture.
+4. In the side panel click **● Start recording**.
    - Allow the **microphone** prompt the first time (so your voice is captured).
    - You should **still hear the meeting** — if it goes silent, see Troubleshooting.
-4. Watch the **Tab** and **Mic** level meters move and the transcript fill in (~every 10 s).
-5. Click **■ Stop** when done.
-6. Click **Generate Notes** → Summary / Key Points / Decisions / Action Items render.
-7. **Copy as Markdown** or **Download .md**.
+5. Watch the **Tab** and **Mic** level meters move and the transcript fill in (~every 10 s).
+6. Click **■ Stop** when done. (To record again, click the toolbar icon on the meeting tab first, then Start.)
+7. Click **Generate Notes** → Summary / Key Points / Decisions / Action Items render.
+8. **Copy as Markdown** or **Download .md**.
 
 Transcript and notes are saved in `chrome.storage.local`, so reopening the panel restores your last session.
 
@@ -143,6 +145,7 @@ First call downloads the model (~240 MB) and, in `auto` mode, runs a one-time CU
 
 ## Troubleshooting
 
+- **"Extension has not been invoked for the current page (activeTab)":** you opened the side panel without authorizing capture. Click the extension's **toolbar icon while your meeting tab is focused** (that grants `activeTab`), then press Start.
 - **Backend dot is red / "not reachable":** the server isn't running. Start `uvicorn main:app --reload`.
 - **Meeting goes silent when recording:** that's the classic tab-capture bug; this build re-routes tab audio to your speakers, so report it if it happens (check the offscreen console via `chrome://extensions` → the extension's "Inspect views: offscreen.html").
 - **Mic meter stays flat:** mic permission was denied. Click the extension, re-trigger the prompt, allow it. Capture still works tab-only without it.

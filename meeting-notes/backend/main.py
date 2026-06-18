@@ -20,9 +20,12 @@ import json
 import tempfile
 import subprocess
 
+import pathlib
+
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 # Load .env if present (ANTHROPIC_API_KEY, WHISPER_MODEL, SUMMARY_MODEL).
@@ -55,6 +58,18 @@ app.add_middleware(
 def health():
     """Health check used by the extension and by you (open in a browser)."""
     return {"status": "ok"}
+
+
+@app.get("/test", response_class=HTMLResponse)
+def test_page():
+    """
+    Serve the controlled test "meeting" page over HTTP (avoids file:// quirks).
+    Open http://localhost:8000/test, focus it, then capture with the extension.
+    """
+    p = pathlib.Path(__file__).resolve().parent.parent / "test-meeting.html"
+    if p.exists():
+        return HTMLResponse(p.read_text(encoding="utf-8"))
+    return HTMLResponse("<h1>test-meeting.html not found</h1>", status_code=404)
 
 
 # --------------------------------------------------------------------------- #

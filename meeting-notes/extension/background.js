@@ -8,16 +8,35 @@ const OFFSCREEN_PATH = "offscreen.html";
 const BACKEND_URL = "http://localhost:8000";
 const CHUNK_SECONDS = 10; // how much audio to buffer before each /transcribe call
 
-// Open the side panel when the toolbar icon is clicked.
-chrome.runtime.onInstalled.addListener(() => {
+// The tab the user last "invoked" the extension on (has the activeTab grant).
+let lastInvokedTabId = null;
+
+// IMPORTANT (MV3 activeTab gotcha): setPanelBehavior settings PERSIST across
+// extension reloads. If openPanelOnActionClick was ever set to true, the panel
+// keeps opening on icon-click WITHOUT firing action.onClicked — which means no
+// `activeTab` grant, and tabCapture.getMediaStreamId() fails with
+// "Extension has not been invoked for the current page".
+//
+// We force it back to FALSE so our own action.onClicked handler runs. Executing
+// the action grants activeTab on the active (meeting) tab; that authorization
+// persists for the tab until it navigates, so the panel's Start can capture it.
+function disableOpenOnActionClick() {
   chrome.sidePanel
-    .setPanelBehavior({ openPanelOnActionClick: true })
-    .catch((e) => console.error("setPanelBehavior:", e));
+    .setPanelBehavior({ openPanelOnActionClick: false })
+    .catch(() => {});
+}
+chrome.runtime.onInstalled.addListener(disableOpenOnActionClick);
+disableOpenOnActionClick(); // also on every service-worker startup
+
+chrome.action.onClicked.addListener((tab) => {
+  // Open the panel synchronously inside the gesture, then remember the tab.
+  if (tab && tab.windowId != null) {
+    chrome.sidePanel
+      .open({ windowId: tab.windowId })
+      .catch((e) => console.error("sidePanel.open:", e));
+  }
+  if (tab) lastInvokedTabId = tab.id;
 });
-// The worker can be torn down and restarted; set behavior on startup too.
-chrome.sidePanel
-  .setPanelBehavior({ openPanelOnActionClick: true })
-  .catch(() => {});
 
 // --------------------------------------------------------------------------- //
 // Offscreen document lifecycle
@@ -43,7 +62,7 @@ async function ensureOffscreenDocument() {
 // --------------------------------------------------------------------------- //
 // Start / stop orchestration
 // --------------------------------------------------------------------------- //
-async function startCapture() {
+async function startCapture(micAllowed) {
   // The meeting tab = the active tab in the focused window.
   const [tab] = await chrome.tabs.query({
     active: true,
@@ -65,9 +84,20 @@ async function startCapture() {
 
   // Mint an opaque stream id the offscreen document turns into a MediaStream.
   // (Done here, not in the worker's media APIs — the worker just brokers it.)
-  const streamId = await chrome.tabCapture.getMediaStreamId({
-    targetTabId: tab.id,
-  });
+  let streamId;
+  try {
+    streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    if (/invoked|activeTab/i.test(msg)) {
+      throw new Error(
+        "Capture not authorized for this tab. Click the extension's toolbar " +
+          "icon while your meeting tab is focused (that authorizes capture), " +
+          "then press Start."
+      );
+    }
+    throw e;
+  }
 
   await ensureOffscreenDocument();
 
@@ -77,6 +107,7 @@ async function startCapture() {
     streamId,
     backendUrl: BACKEND_URL,
     chunkSeconds: CHUNK_SECONDS,
+    micAllowed: !!micAllowed,
   });
 }
 
@@ -97,7 +128,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   // From the side panel:
   if (msg.type === "START_CAPTURE") {
-    startCapture()
+    startCapture(msg.micAllowed)
       .then(() => sendResponse({ ok: true }))
       .catch((err) =>
         sendResponse({ ok: false, error: String((err && err.message) || err) })

@@ -46,7 +46,7 @@ const TARGET_RATE = 16000; // Whisper-friendly mono rate
 chrome.runtime.onMessage.addListener((msg) => {
   if (!msg || msg.target !== "offscreen") return;
   if (msg.type === "OFFSCREEN_START") {
-    startCapture(msg.streamId, msg.backendUrl, msg.chunkSeconds);
+    startCapture(msg.streamId, msg.backendUrl, msg.chunkSeconds, msg.micAllowed);
   } else if (msg.type === "OFFSCREEN_STOP") {
     stopCapture();
   }
@@ -59,7 +59,7 @@ function send(type, extra) {
 // --------------------------------------------------------------------------- //
 // Start
 // --------------------------------------------------------------------------- //
-async function startCapture(streamId, beUrl, chunkSeconds) {
+async function startCapture(streamId, beUrl, chunkSeconds, micAllowed) {
   backendUrl = beUrl || backendUrl;
 
   // 1) Tab audio via the streamId minted by the service worker. Note the legacy
@@ -80,17 +80,27 @@ async function startCapture(streamId, beUrl, chunkSeconds) {
     return;
   }
 
-  // 2) Microphone (optional). If it fails (e.g. permission denied) we continue
-  //    with tab audio only so remote participants are still transcribed.
-  try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch (e) {
+  // 2) Microphone (optional). Only attempt if the side panel confirmed
+  //    permission was granted — otherwise getUserMedia will throw
+  //    NotAllowedError in this invisible offscreen context.
+  if (micAllowed) {
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      micStream = null;
+      send("CAPTURE_WARNING", {
+        error:
+          "Microphone unavailable (" +
+          e.name +
+          "). Recording meeting/tab audio only.",
+      });
+    }
+  } else {
     micStream = null;
     send("CAPTURE_WARNING", {
       error:
-        "Microphone unavailable (" +
-        e.name +
-        "). Recording meeting/tab audio only.",
+        "Microphone permission not granted. Recording meeting/tab audio only. " +
+        "To include your voice, allow microphone access in Chrome and restart recording.",
     });
   }
 
